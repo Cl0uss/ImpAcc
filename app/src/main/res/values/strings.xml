@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">ImpAcc</string>
+
+    <string name="screen_control_accessibility_description">
+        Detects when selected applications are active and displays configured click-through screen overlays.
+    </string>
+</resources>
