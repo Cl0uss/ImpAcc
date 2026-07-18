@@ -1,7 +1,6 @@
 package com.example.impacc
 
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Build
@@ -22,20 +21,27 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
-import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
@@ -78,7 +84,6 @@ class InstalledApplicationsActivity : ComponentActivity() {
                                 RESULT_OK,
                                 resultIntent
                             )
-
                             finish()
                         }
                     )
@@ -88,7 +93,7 @@ class InstalledApplicationsActivity : ComponentActivity() {
     }
 
     private fun getInstalledApplications(): List<InstalledApp> {
-        val applicationInfoList =
+        val installedApplications =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 packageManager.getInstalledApplications(
                     PackageManager.ApplicationInfoFlags.of(0)
@@ -98,7 +103,7 @@ class InstalledApplicationsActivity : ComponentActivity() {
                 packageManager.getInstalledApplications(0)
             }
 
-        return applicationInfoList
+        return installedApplications
             .asSequence()
             .filter { applicationInfo ->
                 applicationInfo.packageName != packageName
@@ -136,6 +141,31 @@ private fun InstalledApplicationsScreen(
     applications: List<InstalledApp>,
     onApplicationSelected: (InstalledApp) -> Unit
 ) {
+    var searchText by remember {
+        mutableStateOf("")
+    }
+
+    val normalizedSearchText = searchText.trim()
+
+    val filteredApplications = remember(
+        applications,
+        normalizedSearchText
+    ) {
+        if (normalizedSearchText.isBlank()) {
+            applications
+        } else {
+            applications.filter { application ->
+                application.name.contains(
+                    normalizedSearchText,
+                    ignoreCase = true
+                ) || application.packageName.contains(
+                    normalizedSearchText,
+                    ignoreCase = true
+                )
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -144,7 +174,7 @@ private fun InstalledApplicationsScreen(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(88.dp),
+                .height(80.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -155,23 +185,34 @@ private fun InstalledApplicationsScreen(
             )
         }
 
-        if (applications.isEmpty()) {
+        ApplicationSearchField(
+            value = searchText,
+            onValueChanged = { newValue ->
+                searchText = newValue
+            }
+        )
+
+        if (filteredApplications.isEmpty()) {
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "No applications found",
-                    color = Color.LightGray,
-                    fontSize = 18.sp
+                    color = Color.Gray,
+                    fontSize = 17.sp
                 )
             }
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
             ) {
                 items(
-                    items = applications,
+                    items = filteredApplications,
                     key = { application ->
                         application.packageName
                     }
@@ -190,6 +231,56 @@ private fun InstalledApplicationsScreen(
             }
         }
     }
+}
+
+@Composable
+private fun ApplicationSearchField(
+    value: String,
+    onValueChanged: (String) -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChanged,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = 20.dp,
+                vertical = 8.dp
+            ),
+        placeholder = {
+            Text(
+                text = "Search application",
+                color = Color.Gray
+            )
+        },
+        trailingIcon = {
+            if (value.isNotEmpty()) {
+                Text(
+                    text = "Clear",
+                    modifier = Modifier
+                        .clickable {
+                            onValueChanged("")
+                        }
+                        .padding(8.dp),
+                    color = Color(0xFF90CAF9),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        },
+        singleLine = true,
+        shape = RoundedCornerShape(8.dp),
+        keyboardOptions = KeyboardOptions(
+            imeAction = ImeAction.Search
+        ),
+        keyboardActions = KeyboardActions(
+            onSearch = {
+                focusManager.clearFocus()
+            }
+        )
+    )
 }
 
 @Composable
@@ -234,7 +325,7 @@ private fun InstalledApplicationRow(
             Text(
                 text = application.packageName,
                 color = Color.Gray,
-                fontSize = 13.sp
+                fontSize = 12.sp
             )
         }
     }
