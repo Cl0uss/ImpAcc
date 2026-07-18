@@ -19,27 +19,34 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -84,6 +91,7 @@ class InstalledApplicationsActivity : ComponentActivity() {
                                 RESULT_OK,
                                 resultIntent
                             )
+
                             finish()
                         }
                     )
@@ -141,25 +149,29 @@ private fun InstalledApplicationsScreen(
     applications: List<InstalledApp>,
     onApplicationSelected: (InstalledApp) -> Unit
 ) {
+    var searchVisible by remember {
+        mutableStateOf(false)
+    }
+
     var searchText by remember {
         mutableStateOf("")
     }
 
-    val normalizedSearchText = searchText.trim()
-
     val filteredApplications = remember(
         applications,
-        normalizedSearchText
+        searchText
     ) {
-        if (normalizedSearchText.isBlank()) {
+        val normalizedQuery = searchText.trim()
+
+        if (normalizedQuery.isBlank()) {
             applications
         } else {
             applications.filter { application ->
                 application.name.contains(
-                    normalizedSearchText,
+                    normalizedQuery,
                     ignoreCase = true
                 ) || application.packageName.contains(
-                    normalizedSearchText,
+                    normalizedQuery,
                     ignoreCase = true
                 )
             }
@@ -185,12 +197,42 @@ private fun InstalledApplicationsScreen(
             )
         }
 
-        ApplicationSearchField(
-            value = searchText,
-            onValueChanged = { newValue ->
-                searchText = newValue
+        if (searchVisible) {
+            ApplicationSearchField(
+                value = searchText,
+                onValueChanged = { newValue ->
+                    searchText = newValue
+                },
+                onClose = {
+                    searchText = ""
+                    searchVisible = false
+                }
+            )
+        } else {
+            Button(
+                onClick = {
+                    searchVisible = true
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = 20.dp,
+                        vertical = 8.dp
+                    )
+                    .height(52.dp),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ButtonColor,
+                    contentColor = Color.White
+                )
+            ) {
+                Text(
+                    text = "Search application",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium
+                )
             }
-        )
+        }
 
         if (filteredApplications.isEmpty()) {
             Box(
@@ -236,51 +278,81 @@ private fun InstalledApplicationsScreen(
 @Composable
 private fun ApplicationSearchField(
     value: String,
-    onValueChanged: (String) -> Unit
+    onValueChanged: (String) -> Unit,
+    onClose: () -> Unit
 ) {
-    val focusManager = LocalFocusManager.current
+    val focusRequester = remember {
+        FocusRequester()
+    }
 
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChanged,
+    val keyboardController =
+        LocalSoftwareKeyboardController.current
+
+    val focusManager =
+        LocalFocusManager.current
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
                 horizontal = 20.dp,
                 vertical = 8.dp
             ),
-        placeholder = {
-            Text(
-                text = "Search application",
-                color = Color.Gray
-            )
-        },
-        trailingIcon = {
-            if (value.isNotEmpty()) {
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChanged,
+            modifier = Modifier
+                .weight(1f)
+                .focusRequester(focusRequester),
+            placeholder = {
                 Text(
-                    text = "Clear",
-                    modifier = Modifier
-                        .clickable {
-                            onValueChanged("")
-                        }
-                        .padding(8.dp),
-                    color = Color(0xFF90CAF9),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium
+                    text = "Enter application name",
+                    color = Color.Gray
                 )
-            }
-        },
-        singleLine = true,
-        shape = RoundedCornerShape(8.dp),
-        keyboardOptions = KeyboardOptions(
-            imeAction = ImeAction.Search
-        ),
-        keyboardActions = KeyboardActions(
-            onSearch = {
-                focusManager.clearFocus()
-            }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(8.dp),
+            keyboardOptions = KeyboardOptions(
+                imeAction = ImeAction.Search
+            ),
+            keyboardActions = KeyboardActions(
+                onSearch = {
+                    keyboardController?.hide()
+                    focusManager.clearFocus()
+                }
+            )
         )
-    )
+
+        Spacer(
+            modifier = Modifier.width(10.dp)
+        )
+
+        Button(
+            onClick = {
+                keyboardController?.hide()
+                focusManager.clearFocus()
+                onClose()
+            },
+            modifier = Modifier.height(56.dp),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF424242),
+                contentColor = Color.White
+            )
+        ) {
+            Text(
+                text = "Close",
+                fontSize = 14.sp
+            )
+        }
+    }
 }
 
 @Composable
@@ -344,3 +416,6 @@ private fun rememberDrawablePainter(
 
 private val BackgroundColor =
     Color(0xFF121212)
+
+private val ButtonColor =
+    Color(0xFF3949AB)
