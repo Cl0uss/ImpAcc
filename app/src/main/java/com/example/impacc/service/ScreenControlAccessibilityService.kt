@@ -12,23 +12,53 @@ class ScreenControlAccessibilityService : AccessibilityService() {
 
     private lateinit var overlayManager: ScreenOverlayManager
 
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private lateinit var foregroundApplicationDetector:
+            ForegroundApplicationDetector
 
-    private var activeApplication: ScreenApplication? = null
-    private var lastRealPackageName: String? = null
+    private val mainHandler =
+        Handler(Looper.getMainLooper())
 
-    private val refreshOverlayRunnable = Runnable {
-        activeApplication?.let { application ->
-            if (::overlayManager.isInitialized) {
-                overlayManager.showOverlay(application)
+    private var displayedApplication:
+            ScreenApplication? = null
+
+    private var lastAccessibilityPackageName:
+            String? = null
+
+    private var pendingExitPackageName:
+            String? = null
+
+    private var pendingExitStartedAt:
+            Long = 0L
+
+    private val foregroundCheckRunnable =
+        object : Runnable {
+
+            override fun run() {
+                checkForegroundApplication()
+
+                mainHandler.postDelayed(
+                    this,
+                    FOREGROUND_CHECK_INTERVAL_MILLISECONDS
+                )
             }
         }
-    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
 
-        overlayManager = ScreenOverlayManager(this)
+        overlayManager =
+            ScreenOverlayManager(this)
+
+        foregroundApplicationDetector =
+            ForegroundApplicationDetector(this)
+
+        mainHandler.removeCallbacks(
+            foregroundCheckRunnable
+        )
+
+        mainHandler.post(
+            foregroundCheckRunnable
+        )
     }
 
     override fun onAccessibilityEvent(
@@ -38,31 +68,16 @@ class ScreenControlAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (
-            event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED
-        ) {
-            return
-        }
+        val eventPackageName =
+            event.packageName
+                ?.toString()
+                ?.takeIf { packageName ->
+                    packageName.isNotBlank()
+                }
+                ?: return
 
-        val eventPackageName = event.packageName
-            ?.toString()
-            ?.takeIf { packageName ->
-                packageName.isNotBlank()
-            }
-            ?: return
-
-        if (isTemporarySystemPackage(eventPackageName)) {
-            restoreOverlayAfterSystemWindow()
-            return
-        }
-
-        if (eventPackageName == packageName) {
-            lastRealPackageName = eventPackageName
-            activeApplication = null
-            removeOverlay()
-            return
-        }
+        lastAccessibilityPackageName =
+            eventPackageName
 
         val selectedApplication =
             ScreenApplicationStorage.getApplication(
@@ -70,65 +85,209 @@ class ScreenControlAccessibilityService : AccessibilityService() {
                 packageName = eventPackageName
             )
 
-        lastRealPackageName = eventPackageName
-
         if (selectedApplication != null) {
-            activeApplication = selectedApplication
+            cancelPendingExit()
 
-            if (::overlayManager.isInitialized) {
-                overlayManager.showOverlay(selectedApplication)
-            }
-        } else {
-            activeApplication = null
-            removeOverlay()
+            showApplicationOverlay(
+                selectedApplication
+            )
         }
+
+        requestImmediateForegroundCheck()
     }
 
     override fun onInterrupt() {
-        mainHandler.removeCallbacksAndMessages(null)
-        removeOverlay()
+        stopMonitoring()
     }
 
     override fun onDestroy() {
-        mainHandler.removeCallbacksAndMessages(null)
-        removeOverlay()
+        stopMonitoring()
 
         super.onDestroy()
     }
 
-    private fun restoreOverlayAfterSystemWindow() {
-        mainHandler.removeCallbacks(refreshOverlayRunnable)
+    private fun checkForegroundApplication() {
+        if (
+            !::overlayManager.isInitialized ||
+            !::foregroundApplicationDetector.isInitialized
+        ) {
+            return
+        }
 
-        mainHandler.postDelayed(
-            refreshOverlayRunnable,
-            OVERLAY_RESTORE_DELAY_MILLISECONDS
+        val usagePackageName =
+            foregroundApplicationDetector
+                .getForegroundPackageName()
+                ?: return
+
+        val selectedApplication =
+            ScreenApplicationStorage.getApplication(
+                context = this,
+                packageName = usagePackageName
+            )
+
+        if (selectedApplication != null) {
+            cancelPendingExit()
+
+            showApplicationOverlay(
+                selectedApplication
+            )
+
+            return
+        }
+
+        val currentApplication =
+            displayedApplication
+                ?: return
+
+        val accessibilityPackageName =
+            lastAccessibilityPackageName
+                ?: return
+
+        /*
+         * Do not remove the overlay unless UsageStats and Accessibility
+         * confirm the same foreground package.
+         */
+        if (
+            usagePackageName != accessibilityPackageName
+        ) {
+            cancelPendingExit()
+            return
+        }
+
+        /*
+         * The selected application may still be visible while Android
+         * temporarily activates the launcher during a navigation gesture.
+         */
+        if (
+            accessibilityPackageName ==
+            currentApplication.packageName
+        ) {
+            cancelPendingExit()
+            return
+        }
+
+        scheduleConfirmedExit(
+            packageName = usagePackageName
         )
     }
 
-    private fun removeOverlay() {
-        mainHandler.removeCallbacks(refreshOverlayRunnable)
+    private fun showApplicationOverlay(
+        application: ScreenApplication
+    ) {
+        if (!::overlayManager.isInitialized) {
+            return
+        }
+
+        val overlayAlreadyMatches =
+            displayedApplication == application
+
+        if (overlayAlreadyMatches) {
+            return
+        }
+
+        overlayManager.showOverlay(
+            application
+        )
+
+        displayedApplication =
+            application
+    }
+
+    private fun scheduleConfirmedExit(
+        packageName: String
+    ) {
+        val currentTime =
+            System.currentTimeMillis()
+
+        if (
+            pendingExitPackageName != packageName
+        ) {
+            pendingExitPackageName =
+                packageName
+
+            pendingExitStartedAt =
+                currentTime
+
+            return
+        }
+
+        val pendingDuration =
+            currentTime - pendingExitStartedAt
+
+        if (
+            pendingDuration <
+            EXIT_CONFIRMATION_DELAY_MILLISECONDS
+        ) {
+            return
+        }
+
+        /*
+         * Check both sources again before removing the overlay.
+         */
+        val latestUsagePackageName =
+            foregroundApplicationDetector
+                .getForegroundPackageName()
+                ?: return
+
+        val latestAccessibilityPackageName =
+            lastAccessibilityPackageName
+                ?: return
+
+        if (
+            latestUsagePackageName != packageName ||
+            latestAccessibilityPackageName != packageName
+        ) {
+            cancelPendingExit()
+            return
+        }
+
+        removeCurrentOverlay()
+    }
+
+    private fun cancelPendingExit() {
+        pendingExitPackageName = null
+        pendingExitStartedAt = 0L
+    }
+
+    private fun removeCurrentOverlay() {
+        if (::overlayManager.isInitialized) {
+            overlayManager.removeOverlay()
+        }
+
+        displayedApplication = null
+
+        cancelPendingExit()
+    }
+
+    private fun requestImmediateForegroundCheck() {
+        mainHandler.removeCallbacks(
+            foregroundCheckRunnable
+        )
+
+        mainHandler.post(
+            foregroundCheckRunnable
+        )
+    }
+
+    private fun stopMonitoring() {
+        mainHandler.removeCallbacksAndMessages(null)
 
         if (::overlayManager.isInitialized) {
             overlayManager.removeOverlay()
         }
-    }
 
-    private fun isTemporarySystemPackage(
-        packageName: String
-    ): Boolean {
-        return packageName in TEMPORARY_SYSTEM_PACKAGES
+        displayedApplication = null
+        lastAccessibilityPackageName = null
+
+        cancelPendingExit()
     }
 
     companion object {
 
-        private const val OVERLAY_RESTORE_DELAY_MILLISECONDS =
-            250L
+        private const val FOREGROUND_CHECK_INTERVAL_MILLISECONDS =
+            400L
 
-        private val TEMPORARY_SYSTEM_PACKAGES = setOf(
-            "com.android.systemui",
-            "com.samsung.android.systemui",
-            "com.samsung.android.app.soundassistant",
-            "com.samsung.android.app.cocktailbarservice"
-        )
+        private const val EXIT_CONFIRMATION_DELAY_MILLISECONDS =
+            800L
     }
 }

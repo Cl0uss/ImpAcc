@@ -2,10 +2,12 @@ package com.example.impacc
 
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
+import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.os.Process
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
@@ -59,6 +61,9 @@ class ScreenControlActivity : ComponentActivity() {
     private val accessibilityEnabledState =
         mutableStateOf(false)
 
+    private val usageAccessEnabledState =
+        mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -70,7 +75,9 @@ class ScreenControlActivity : ComponentActivity() {
                 ) {
                     ScreenControlScreen(
                         accessibilityEnabled =
-                            accessibilityEnabledState.value
+                            accessibilityEnabledState.value,
+                        usageAccessEnabled =
+                            usageAccessEnabledState.value
                     )
                 }
             }
@@ -82,37 +89,59 @@ class ScreenControlActivity : ComponentActivity() {
 
         accessibilityEnabledState.value =
             isScreenControlAccessibilityEnabled(this)
+
+        usageAccessEnabledState.value =
+            hasUsageStatsAccess(this)
     }
 }
 
 @Composable
 fun ScreenControlScreen(
-    accessibilityEnabled: Boolean
+    accessibilityEnabled: Boolean,
+    usageAccessEnabled: Boolean
 ) {
     val context = LocalContext.current
 
     val selectedApplications = remember {
         mutableStateListOf<ScreenApplication>().apply {
             addAll(
-                ScreenApplicationStorage.getApplications(context)
+                ScreenApplicationStorage.getApplications(
+                    context
+                )
             )
         }
     }
 
     val showAccessibilityDialog = remember {
-        mutableStateOf(!accessibilityEnabled)
+        mutableStateOf(false)
+    }
+
+    val showUsageAccessDialog = remember {
+        mutableStateOf(false)
     }
 
     fun refreshApplications() {
         selectedApplications.clear()
 
         selectedApplications.addAll(
-            ScreenApplicationStorage.getApplications(context)
+            ScreenApplicationStorage.getApplications(
+                context
+            )
         )
     }
 
-    fun requestAccessibilityPermission() {
-        showAccessibilityDialog.value = true
+    fun requestRequiredPermission(): Boolean {
+        if (!accessibilityEnabled) {
+            showAccessibilityDialog.value = true
+            return false
+        }
+
+        if (!usageAccessEnabled) {
+            showUsageAccessDialog.value = true
+            return false
+        }
+
+        return true
     }
 
     val applicationSettingsLauncher =
@@ -189,77 +218,16 @@ fun ScreenControlScreen(
             )
         }
 
-        if (!accessibilityEnabled) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        horizontal = 32.dp,
-                        vertical = 8.dp
-                    ),
-                shape = RoundedCornerShape(4.dp),
-                color = Color(0xFF5D4037)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = "Screen Control is disabled",
-                        color = Color.White,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(
-                        modifier = Modifier.height(6.dp)
-                    )
-
-                    Text(
-                        text = "Enable the accessibility service to show overlays over selected applications.",
-                        color = Color.LightGray,
-                        fontSize = 14.sp
-                    )
-
-                    Spacer(
-                        modifier = Modifier.height(12.dp)
-                    )
-
-                    Button(
-                        onClick = {
-                            requestAccessibilityPermission()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = ButtonColor,
-                            contentColor = Color.White
-                        )
-                    ) {
-                        Text(
-                            text = "Enable Screen Control"
-                        )
-                    }
-                }
+        ScreenControlStatus(
+            accessibilityEnabled = accessibilityEnabled,
+            usageAccessEnabled = usageAccessEnabled,
+            onEnableAccessibility = {
+                showAccessibilityDialog.value = true
+            },
+            onEnableUsageAccess = {
+                showUsageAccessDialog.value = true
             }
-        } else {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        horizontal = 32.dp,
-                        vertical = 8.dp
-                    ),
-                shape = RoundedCornerShape(4.dp),
-                color = Color(0xFF1B5E20)
-            ) {
-                Text(
-                    text = "Screen Control is active",
-                    modifier = Modifier.padding(16.dp),
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
+        )
 
         Spacer(
             modifier = Modifier.height(12.dp)
@@ -267,18 +235,15 @@ fun ScreenControlScreen(
 
         Button(
             onClick = {
-                if (!accessibilityEnabled) {
-                    requestAccessibilityPermission()
+                if (!requestRequiredPermission()) {
                     return@Button
                 }
 
-                val pickerIntent = Intent(
-                    context,
-                    InstalledApplicationsActivity::class.java
-                )
-
                 applicationPickerLauncher.launch(
-                    pickerIntent
+                    Intent(
+                        context,
+                        InstalledApplicationsActivity::class.java
+                    )
                 )
             },
             modifier = Modifier
@@ -330,8 +295,7 @@ fun ScreenControlScreen(
                     ScreenApplicationRow(
                         application = application,
                         onOpenSettings = {
-                            if (!accessibilityEnabled) {
-                                requestAccessibilityPermission()
+                            if (!requestRequiredPermission()) {
                                 return@ScreenApplicationRow
                             }
 
@@ -379,7 +343,7 @@ fun ScreenControlScreen(
             },
             text = {
                 Text(
-                    text = "ImpAcc needs its Screen Control accessibility service enabled to detect when a selected application is active and display click-through screen overlays. ImpAcc does not read or store text entered in other applications."
+                    text = "Open Accessibility settings, select ImpAcc Screen Control and enable it. Then return to ImpAcc."
                 )
             },
             confirmButton = {
@@ -395,16 +359,12 @@ fun ScreenControlScreen(
                             )
                         } catch (_: Exception) {
                             context.startActivity(
-                                Intent(
-                                    Settings.ACTION_SETTINGS
-                                )
+                                Intent(Settings.ACTION_SETTINGS)
                             )
                         }
                     }
                 ) {
-                    Text(
-                        text = "Open settings"
-                    )
+                    Text(text = "Open settings")
                 }
             },
             dismissButton = {
@@ -413,12 +373,135 @@ fun ScreenControlScreen(
                         showAccessibilityDialog.value = false
                     }
                 ) {
-                    Text(
-                        text = "Cancel"
-                    )
+                    Text(text = "Cancel")
                 }
             }
         )
+    }
+
+    if (showUsageAccessDialog.value) {
+        AlertDialog(
+            onDismissRequest = {
+                showUsageAccessDialog.value = false
+            },
+            title = {
+                Text(
+                    text = "Usage access required"
+                )
+            },
+            text = {
+                Text(
+                    text = "ImpAcc needs usage access to determine when the selected application is really open. Open the settings, find ImpAcc and enable usage access."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showUsageAccessDialog.value = false
+
+                        try {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_USAGE_ACCESS_SETTINGS
+                                )
+                            )
+                        } catch (_: Exception) {
+                            context.startActivity(
+                                Intent(Settings.ACTION_SETTINGS)
+                            )
+                        }
+                    }
+                ) {
+                    Text(text = "Open settings")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showUsageAccessDialog.value = false
+                    }
+                ) {
+                    Text(text = "Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ScreenControlStatus(
+    accessibilityEnabled: Boolean,
+    usageAccessEnabled: Boolean,
+    onEnableAccessibility: () -> Unit,
+    onEnableUsageAccess: () -> Unit
+) {
+    val everythingEnabled =
+        accessibilityEnabled && usageAccessEnabled
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = 32.dp,
+                vertical = 8.dp
+            ),
+        shape = RoundedCornerShape(4.dp),
+        color = if (everythingEnabled) {
+            Color(0xFF1B5E20)
+        } else {
+            Color(0xFF5D4037)
+        }
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Text(
+                text = if (everythingEnabled) {
+                    "Screen Control is active"
+                } else {
+                    "Additional permissions required"
+                },
+                color = Color.White,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            if (!accessibilityEnabled) {
+                Spacer(
+                    modifier = Modifier.height(10.dp)
+                )
+
+                Button(
+                    onClick = onEnableAccessibility,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ButtonColor
+                    )
+                ) {
+                    Text(
+                        text = "Enable accessibility"
+                    )
+                }
+            }
+
+            if (!usageAccessEnabled) {
+                Spacer(
+                    modifier = Modifier.height(10.dp)
+                )
+
+                Button(
+                    onClick = onEnableUsageAccess,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ButtonColor
+                    )
+                ) {
+                    Text(
+                        text = "Enable usage access"
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -451,9 +534,7 @@ private fun ScreenApplicationRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(
-                onClick = onOpenSettings
-            )
+            .clickable(onClick = onOpenSettings)
             .padding(
                 horizontal = 20.dp,
                 vertical = 14.dp
@@ -490,9 +571,7 @@ private fun ScreenApplicationRow(
         Text(
             text = "Remove",
             modifier = Modifier
-                .clickable(
-                    onClick = onRemove
-                )
+                .clickable(onClick = onRemove)
                 .padding(12.dp),
             color = Color(0xFFFF5252),
             fontSize = 15.sp,
@@ -540,11 +619,29 @@ private fun isScreenControlAccessibilityEnabled(
         ScreenControlAccessibilityService::class.java.name
 
     return enabledServices.any { serviceInfo ->
-        val service = serviceInfo.resolveInfo.serviceInfo
+        val service =
+            serviceInfo.resolveInfo.serviceInfo
 
         service.packageName == context.packageName &&
                 service.name == expectedServiceName
     }
+}
+
+private fun hasUsageStatsAccess(
+    context: Context
+): Boolean {
+    val appOpsManager =
+        context.getSystemService(
+            AppOpsManager::class.java
+        )
+
+    val mode = appOpsManager.unsafeCheckOpNoThrow(
+        AppOpsManager.OPSTR_GET_USAGE_STATS,
+        Process.myUid(),
+        context.packageName
+    )
+
+    return mode == AppOpsManager.MODE_ALLOWED
 }
 
 private val BackgroundColor =
