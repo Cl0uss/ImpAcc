@@ -310,4 +310,4 @@ class ScreenControlAccessibilityService : AccessibilityService() {
         private const val SYSTEM_UI_PACKAGE =
             "com.android.systemui"
     }
-}
+}   
