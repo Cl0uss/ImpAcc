@@ -55,9 +55,9 @@ class ScreenOverlayManager(
         currentPackageName = normalizedApplication.packageName
         currentConfiguration = normalizedApplication
 
-        val displayMetrics = service.resources.displayMetrics
-        val screenWidth = displayMetrics.widthPixels
-        val screenHeight = displayMetrics.heightPixels
+        val displayMetrics = windowManager.currentWindowMetrics.bounds
+        val screenWidth = displayMetrics.width()
+        val screenHeight = displayMetrics.height()
 
         val upperHeight = normalizedApplication.upperPart
             .coerceAtMost(screenHeight)
@@ -97,7 +97,7 @@ class ScreenOverlayManager(
             addOverlayView(
                 width = leftWidth,
                 height = WindowManager.LayoutParams.MATCH_PARENT,
-                gravity = Gravity.START,
+                gravity = Gravity.LEFT,
                 color = overlayColor
             )
         }
@@ -106,7 +106,7 @@ class ScreenOverlayManager(
             addOverlayView(
                 width = rightWidth,
                 height = WindowManager.LayoutParams.MATCH_PARENT,
-                gravity = Gravity.END,
+                gravity = Gravity.RIGHT,
                 color = overlayColor
             )
         }
@@ -150,6 +150,8 @@ class ScreenOverlayManager(
             PixelFormat.TRANSLUCENT
         ).apply {
             this.gravity = gravity
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            setFitInsetsTypes(0)
         }
 
         try {

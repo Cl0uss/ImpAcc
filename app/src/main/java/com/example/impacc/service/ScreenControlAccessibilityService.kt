@@ -7,6 +7,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.content.res.Configuration
+import android.graphics.PixelFormat
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.Toast
+import com.example.impacc.overlay.FrameEditor
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import com.example.impacc.data.ScreenApplication
@@ -16,6 +24,67 @@ import com.example.impacc.overlay.ScreenOverlayManager
 class ScreenControlAccessibilityService : AccessibilityService() {
 
     private lateinit var overlayManager: ScreenOverlayManager
+
+    private var editingApplication: ScreenApplication? = null
+    private var editor: FrameEditor? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val launchTimeout = Runnable {
+        if (editingApplication != null && editor == null) {
+            cancelEditing()
+            Toast.makeText(this, "Приложение не открылось. Попробуйте ещё раз.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun beginEditing(application: ScreenApplication) {
+        cancelEditing()
+        removeCurrentOverlay()
+        editingApplication = application
+        handler.postDelayed(launchTimeout, 15000)
+    }
+
+    fun cancelEditing() {
+        handler.removeCallbacks(launchTimeout)
+        editingApplication = null
+        editor?.let { view ->
+            if (view.isAttachedToWindow) getSystemService(WindowManager::class.java).removeView(view)
+        }
+        editor = null
+    }
+
+    private fun showEditor(application: ScreenApplication) {
+        if (editor != null) return
+        removeCurrentOverlay()
+        val view = FrameEditor(this, application, onSave = { updated ->
+            ScreenApplicationStorage.updateApplication(this, updated)
+            cancelEditing()
+            updateOverlayFromWindows()
+            Toast.makeText(this, "Рамки сохранены", Toast.LENGTH_SHORT).show()
+        }, onCancel = {
+            cancelEditing()
+            updateOverlayFromWindows()
+        })
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.LEFT
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            setFitInsetsTypes(0)
+        }
+        editor = view
+        try {
+            getSystemService(WindowManager::class.java).addView(view, params)
+            handler.removeCallbacks(launchTimeout)
+        } catch (_: RuntimeException) {
+            cancelEditing()
+            Toast.makeText(this, "Не удалось показать рамки", Toast.LENGTH_LONG).show()
+        }
+    }
 
     private var displayedApplication: ScreenApplication? = null
 
@@ -31,6 +100,7 @@ class ScreenControlAccessibilityService : AccessibilityService() {
                 when (intent?.action) {
 
                     Intent.ACTION_SCREEN_OFF -> {
+                        cancelEditing()
                         removeCurrentOverlay()
                     }
 
@@ -55,6 +125,7 @@ class ScreenControlAccessibilityService : AccessibilityService() {
 
         serviceInfo = info
 
+        connectedInstance = this
         registerScreenReceiver()
 
         updateOverlayFromWindows()
@@ -102,6 +173,7 @@ class ScreenControlAccessibilityService : AccessibilityService() {
             }
 
         if (systemUiIsOpen) {
+            if (editor != null) cancelEditing()
             removeCurrentOverlay()
             return
         }
@@ -115,6 +187,18 @@ class ScreenControlAccessibilityService : AccessibilityService() {
                 window.type ==
                         AccessibilityWindowInfo.TYPE_APPLICATION
             }
+
+        editingApplication?.let { application ->
+            val foreground = applicationWindows.firstOrNull { it.isFocused }
+                ?: applicationWindows.firstOrNull { it.isActive }
+            val foregroundPackage = foreground?.let { getPackageName(it) }
+            if (foregroundPackage == application.packageName) {
+                showEditor(application)
+            } else if (editor != null && foregroundPackage != null) {
+                cancelEditing()
+            }
+            if (editingApplication != null) return
+        }
 
         val currentApplication =
             displayedApplication
@@ -292,11 +376,21 @@ class ScreenControlAccessibilityService : AccessibilityService() {
         screenReceiverRegistered = false
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        cancelEditing()
+        removeCurrentOverlay()
+        updateOverlayFromWindows()
+    }
+
     override fun onInterrupt() {
+        cancelEditing()
         removeCurrentOverlay()
     }
 
     override fun onDestroy() {
+        connectedInstance = null
+        cancelEditing()
 
         unregisterScreenReceiver()
 
@@ -306,6 +400,9 @@ class ScreenControlAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        var connectedInstance: ScreenControlAccessibilityService? = null
+            private set
+
 
         private const val SYSTEM_UI_PACKAGE =
             "com.android.systemui"

@@ -36,6 +36,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -130,6 +134,15 @@ fun ScreenControlScreen(
         )
     }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshApplications()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     fun requestRequiredPermission(): Boolean {
         if (!accessibilityEnabled) {
             showAccessibilityDialog.value = true
@@ -175,14 +188,6 @@ fun ScreenControlScreen(
                     InstalledApplicationsActivity.EXTRA_PACKAGE_NAME
                 ) ?: return@rememberLauncherForActivityResult
 
-            ScreenApplicationStorage.addApplication(
-                context = context,
-                name = applicationName,
-                packageName = packageName
-            )
-
-            refreshApplications()
-
             val settingsIntent = Intent(
                 context,
                 ApplicationSettingsActivity::class.java
@@ -191,6 +196,7 @@ fun ScreenControlScreen(
                     ApplicationSettingsActivity.EXTRA_PACKAGE_NAME,
                     packageName
                 )
+                putExtra(InstalledApplicationsActivity.EXTRA_APP_NAME, applicationName)
             }
 
             applicationSettingsLauncher.launch(
